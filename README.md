@@ -20,4 +20,4 @@ index.html：網頁主結構
 增加帳戶登入功能讓每一個人的紀錄得以保存
 
 ---
-網頁預覽網址：** [請在此貼上你的 GitHub Pages 網址]
+網頁預覽網址：https://aeric0984068013-cpu.github.io/tradingtrain/
