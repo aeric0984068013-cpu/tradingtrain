@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>復古木質股票大亨 | Retro Stock Sim</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Babel for JSX transformation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Google Fonts: Noto Serif TC for retro feel -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700;900&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Noto Serif TC', serif;
+        }
+        /* Custom scrollbar for webkit */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #e8dcc5; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #8B4513; 
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="bg-[#2d1b14]">
+    <div id="root"></div>
+
+    <!-- Script Type="text/babel" with data-type="module" allows using imports -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo } from 'https://esm.sh/react@18.2.0';
+        import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
+        // Import Lucide React icons from ESM CDN
+        import { 
+            TrendingUp, TrendingDown, DollarSign, Activity, History, Briefcase, 
+            RefreshCw, Calendar, ArrowRightCircle, Trophy, AlertTriangle, 
+            CheckCircle, Skull, Zap 
+        } from 'https://esm.sh/lucide-react@0.263.1?deps=react@18.2.0';
+
+        /**
+         * 復古木質風格股票模擬交易遊戲
+         * Retro Wooden Style Stock Simulation
+         */
+
+        // --- 輔助函式與常數 ---
+
+        const INITIAL_CASH = 5000000; // 起始資金
+        const INITIAL_PRICE = 16800;  // 模擬指數點位
+        const MAX_LEVERAGE = 5;       // 最大槓桿倍數
+        const MAX_CANDLES = 40;       // 圖表蠟燭數
+        const MAX_TURNS = 100;        // 最大回合數
+
+        // 生成常態分佈隨機數 (Box-Muller transform)
+        const randomNormal = (mean = 0, stdev = 1) => {
+            const u = 1 - Math.random(); 
+            const v = Math.random();
+            const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+            return z * stdev + mean;
+        };
+
+        // 格式化貨幣
+        const formatMoney = (amount) => {
+            return new Intl.NumberFormat('zh-TW', {
+                style: 'decimal',
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0,
+            }).format(amount);
+        };
+
+        // --- UI 元件 ---
+
+        const WoodPanel = ({ children, className = "", lighter = false }) => (
+            <div className={`
+                relative overflow-hidden rounded-lg shadow-xl
+                ${lighter ? 'bg-[#D2B48C] border-[#8B4513]' : 'bg-[#5D4037] border-[#3E2723]'}
+                border-4 border-double
+                before:content-[''] before:absolute before:inset-0 before:opacity-10 
+                before:bg-[url('https://www.transparenttextures.com/patterns/wood-pattern.png')]
+                ${className}
+            `}>
+                <div className="absolute inset-0 shadow-[inset_2px_2px_10px_rgba(0,0,0,0.4)] pointer-events-none z-10 rounded-sm"></div>
+                <div className="relative z-20 h-full">
+                {children}
+                </div>
+            </div>
+        );
+
+        const Screw = () => (
+            <div className="w-3 h-3 rounded-full bg-yellow-600 shadow-[inset_-1px_-1px_2px_rgba(0,0,0,0.5),1px_1px_2px_rgba(255,255,255,0.3)] border border-yellow-800"></div>
+        );
+
+        const RetroButton = ({ onClick, children, variant = 'primary', disabled = false, className = '' }) => {
+            const styles = {
+                primary: 'bg-[#8B4513] text-[#F5DEB3] hover:bg-[#A0522D] border-[#3E2723]', 
+                success: 'bg-[#2E7D32] text-white hover:bg-[#388E3C] border-[#1B5E20]', 
+                danger: 'bg-[#C62828] text-white hover:bg-[#D32F2F] border-[#B71C1C]', 
+                neutral: 'bg-[#A1887F] text-[#3E2723] hover:bg-[#BCAAA4] border-[#5D4037]',
+                action:   'bg-[#F57F17] text-[#3E2723] hover:bg-[#FFB300] border-[#E65100]', 
+                disabled: 'bg-[#5D4037] text-[#8D6E63] border-[#3E2723] cursor-not-allowed opacity-70',
+            };
+
+            return (
+                <button
+                onClick={onClick}
+                disabled={disabled}
+                className={`
+                    px-4 py-2 rounded font-serif font-bold transition-all transform active:scale-95 active:shadow-none
+                    border-b-4 border-r-4 shadow-lg
+                    flex items-center justify-center gap-2
+                    ${disabled ? styles.disabled : styles[variant]}
+                    ${className}
+                `}
+                >
+                {children}
+                </button>
+            );
+        };
+
+        // --- 主程式 ---
+
+        function RetroStockSim() {
+            // 遊戲狀態
+            const [data, setData] = useState([]); 
+            const [currentPrice, setCurrentPrice] = useState(INITIAL_PRICE);
+            
+            // 資金狀態
+            const [cash, setCash] = useState(INITIAL_CASH);
+            const [shares, setShares] = useState(0); 
+            const [avgCost, setAvgCost] = useState(0); 
+            const [leverageMode, setLeverageMode] = useState(1);
+            
+            const [logs, setLogs] = useState([]); 
+            const [dayCount, setDayCount] = useState(1);
+            const [turnsPlayed, setTurnsPlayed] = useState(0);
+            const [isGameOver, setIsGameOver] = useState(false);
+            const [bankrupt, setBankrupt] = useState(false);
+
+            // 計算動態權益
+            const equity = cash + (shares * currentPrice);
+            
+            const profit = equity - INITIAL_CASH;
+            const profitPercent = (profit / INITIAL_CASH) * 100;
+
+            // 生成 K 線
+            const generateNextCandle = (prevClose, dayIndex) => {
+                const volatility = prevClose * 0.015; 
+                const change = randomNormal(0, volatility); 
+                let close = Math.round(prevClose + change);
+                const gap = randomNormal(0, volatility * 0.3);
+                let open = Math.round(prevClose + gap);
+                const dayRange = Math.abs(randomNormal(volatility * 0.8, volatility * 0.5));
+                const baseHigh = Math.max(open, close);
+                const baseLow = Math.min(open, close);
+                const high = Math.round(baseHigh + (dayRange * Math.random()));
+                const low = Math.round(baseLow - (dayRange * Math.random()));
+
+                return { time: dayIndex, open, close, high, low };
+            };
+
+            useEffect(() => {
+                const initialData = [];
+                let price = INITIAL_PRICE;
+                for (let i = 0; i < 20; i++) {
+                const candle = generateNextCandle(price, i);
+                initialData.push(candle);
+                price = candle.close;
+                }
+                setData(initialData);
+                setCurrentPrice(price);
+                setDayCount(21);
+                addLog('系統', `遊戲開始！本金 ${formatMoney(INITIAL_CASH)}。請先全倉建倉 (1x)，再決定是否開槓桿 (5x)。`);
+            }, []);
+
+            // 檢查破產 (Margin Call)
+            useEffect(() => {
+                if (!isGameOver && equity <= 0) {
+                setBankrupt(true);
+                finishGame(true);
+                }
+            }, [equity, isGameOver]);
+
+            // 手動推進下一天
+            const handleNextDay = () => {
+                if (isGameOver) return;
+
+                if (turnsPlayed >= MAX_TURNS) {
+                finishGame(false);
+                return;
+                }
+
+                setData(prevData => {
+                const lastCandle = prevData[prevData.length - 1];
+                const nextCandle = generateNextCandle(lastCandle.close, dayCount);
+                setCurrentPrice(nextCandle.close); 
+                const newData = [...prevData, nextCandle];
+                if (newData.length > MAX_CANDLES) newData.shift(); 
+                return newData;
+                });
+                
+                setDayCount(prev => prev + 1);
+                setTurnsPlayed(prev => {
+                    const newTurns = prev + 1;
+                    if (newTurns >= MAX_TURNS) {
+                        finishGame(false);
+                    }
+                    return newTurns;
+                });
+            };
+
+            const finishGame = (isBankrupt) => {
+                setIsGameOver(true);
+                if (isBankrupt) {
+                    addLog('系統', '權益歸零！您已破產 (Bankrupt)。');
+                } else {
+                    addLog('系統', '遊戲結束！正在結算成績...');
+                }
+            };
+
+            // 交易邏輯 (建倉與加碼)
+            const handleTrade = (type, targetLeverage) => {
+                if (isGameOver) return;
+                
+                // 計算目標總部位價值
+                const purchasingPower = equity * targetLeverage;
+                const targetUnits = Math.floor(purchasingPower / currentPrice);
+                
+                if (targetUnits <= 0) {
+                    addLog('錯誤', '權益不足，無法操作！');
+                    return;
+                }
+
+                // 計算需要加碼的數量
+                const currentAbsShares = Math.abs(shares);
+                const unitsToAdd = targetUnits - currentAbsShares;
+
+                if (unitsToAdd <= 0) {
+                    addLog('提示', '目前部位已達該槓桿上限。');
+                    return;
+                }
+
+                if (type === 'BUY') {
+                    // 做多 (初始 或 加碼)
+                    const cost = unitsToAdd * currentPrice;
+                    setCash(prev => prev - cost);
+                    
+                    const newTotalShares = shares + unitsToAdd;
+                    const newAvgCost = shares === 0 
+                        ? currentPrice 
+                        : ((shares * avgCost) + cost) / newTotalShares;
+                        
+                    setAvgCost(newAvgCost);
+                    setShares(newTotalShares);
+                    setLeverageMode(targetLeverage);
+                    
+                    if (targetLeverage === 1) {
+                        addLog('做多', `全倉買進 (1x)！建立 ${unitsToAdd} 口多單 @ ${currentPrice}`);
+                    } else {
+                        addLog('加碼', `開滿5倍槓桿！加碼 ${unitsToAdd} 口多單 @ ${currentPrice}`);
+                    }
+
+                } else {
+                    // 做空 (初始 或 加碼)
+                    const proceeds = unitsToAdd * currentPrice;
+                    setCash(prev => prev + proceeds);
+                    
+                    const newTotalShares = shares - unitsToAdd; // 負數更負
+                    const absShares = Math.abs(shares);
+                    const newAvgCost = shares === 0 
+                        ? currentPrice 
+                        : ((absShares * avgCost) + proceeds) / (absShares + unitsToAdd);
+
+                    setAvgCost(newAvgCost);
+                    setShares(newTotalShares);
+                    setLeverageMode(targetLeverage);
+
+                    if (targetLeverage === 1) {
+                        addLog('做空', `全倉賣出 (1x)！建立 ${unitsToAdd} 口空單 @ ${currentPrice}`);
+                    } else {
+                        addLog('加碼', `開滿5倍槓桿！加碼 ${unitsToAdd} 口空單 @ ${currentPrice}`);
+                    }
+                }
+            };
+
+            // 平倉邏輯
+            const closePosition = () => {
+                if (shares === 0 || isGameOver) return;
+                
+                const finalEquity = equity;
+                setCash(finalEquity);
+                
+                const type = shares > 0 ? '平多' : '平空';
+                const amount = Math.abs(shares);
+
+                addLog(type, `平倉 ${amount} 口 @ ${currentPrice}。本次結算權益: ${formatMoney(finalEquity)}`);
+                
+                // 清空部位
+                setShares(0);
+                setAvgCost(0);
+                setLeverageMode(1); // 重置槓桿狀態
+            };
+
+            const addLog = (action, message) => {
+                setLogs(prev => [{ time: `Day ${dayCount}`, action, message }, ...prev].slice(0, 50));
+            };
+
+            // 渲染圖表
+            const renderChart = () => {
+                if (data.length === 0) return null;
+                const width = 600;
+                const height = 300;
+                const padding = 30;
+                const minPrice = Math.min(...data.map(d => d.low)) * 0.99;
+                const maxPrice = Math.max(...data.map(d => d.high)) * 1.01;
+                const priceRange = maxPrice - minPrice;
+                const getY = (price) => height - padding - ((price - minPrice) / priceRange) * (height - 2 * padding);
+                const getX = (index) => padding + (index * ((width - 2 * padding) / MAX_CANDLES));
+                const candleWidth = (width - 2 * padding) / MAX_CANDLES * 0.6;
+
+                return (
+                <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full drop-shadow-md">
+                    {[0, 0.25, 0.5, 0.75, 1].map(ratio => {
+                        const price = minPrice + (priceRange * ratio);
+                        const y = getY(price);
+                        return (
+                            <g key={ratio}>
+                                <line x1={padding} y1={y} x2={width-padding} y2={y} stroke="#8B4513" strokeOpacity="0.2" strokeDasharray="4 4" />
+                                <text x={width-padding+5} y={y+4} fontSize="10" fill="#5D4037" className="font-serif">{price.toFixed(0)}</text>
+                            </g>
+                        )
+                    })}
+                    {data.map((d, i) => {
+                    const x = getX(i);
+                    const yOpen = getY(d.open);
+                    const yClose = getY(d.close);
+                    const yHigh = getY(d.high);
+                    const yLow = getY(d.low);
+                    const isUp = d.close >= d.open;
+                    const color = isUp ? '#C62828' : '#2E7D32';
+                    return (
+                        <g key={i}>
+                        <line x1={x} y1={yHigh} x2={x} y2={yLow} stroke={color} strokeWidth="1.5" />
+                        <rect x={x - candleWidth / 2} y={Math.min(yOpen, yClose)} width={candleWidth} height={Math.max(1, Math.abs(yOpen - yClose))} fill={color} stroke={isUp ? '#8E0000' : '#1B5E20'} strokeWidth="0.5" />
+                        </g>
+                    );
+                    })}
+                    <line x1={padding} y1={getY(currentPrice)} x2={width-padding} y2={getY(currentPrice)} stroke="#F57F17" strokeWidth="1" strokeDasharray="2 2" />
+                </svg>
+                );
+            };
+
+            return (
+                <div className="min-h-screen bg-[#2d1b14] p-4 md:p-8 text-[#3E2723] flex flex-col items-center">
+                
+                {/* 標題區 */}
+                <div className="w-full max-w-4xl mb-6 flex justify-between items-center">
+                    <div className="relative p-4 bg-gradient-to-b from-[#b8860b] to-[#8b6508] rounded shadow-lg border-2 border-[#ffd700]">
+                        <div className="absolute top-1 left-1"><Screw /></div>
+                        <div className="absolute top-1 right-1"><Screw /></div>
+                        <div className="absolute bottom-1 left-1"><Screw /></div>
+                        <div className="absolute bottom-1 right-1"><Screw /></div>
+                        <h1 className="text-3xl md:text-4xl font-black text-[#3e2723] tracking-widest drop-shadow-[1px_1px_0_rgba(255,255,255,0.4)]">
+                        大木頭指數期貨
+                        </h1>
+                        <p className="text-xs text-[#3e2723] font-bold text-center mt-1 uppercase tracking-widest">High Leverage Futures</p>
+                    </div>
+                    
+                    <div className="flex gap-2">
+                        <RetroButton onClick={() => window.location.reload()} variant="neutral">
+                            <RefreshCw size={18} /> 重置
+                        </RetroButton>
+                    </div>
+                </div>
+
+                {/* 主要內容網格 */}
+                <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-6">
+                    
+                    {/* 左側：資產狀態 */}
+                    <div className="md:col-span-1 space-y-6">
+                        <WoodPanel lighter className="p-4 flex flex-col gap-4">
+                            <div className="flex justify-between items-center border-b-2 border-[#8B4513] pb-2">
+                                <h2 className="text-xl font-bold flex items-center gap-2">
+                                    <Calendar size={20} /> 回合倒數
+                                </h2>
+                                <span className={`text-xl font-black ${turnsPlayed >= MAX_TURNS ? 'text-red-600' : 'text-[#3E2723]'}`}>
+                                    {MAX_TURNS - turnsPlayed} 天
+                                </span>
+                            </div>
+                            
+                            <div className="space-y-1">
+                                <p className="text-sm opacity-70">權益總值 (Equity)</p>
+                                <p className={`text-2xl font-bold font-mono ${equity >= INITIAL_CASH ? 'text-[#C62828]' : 'text-[#2E7D32]'}`}>
+                                    {formatMoney(equity)}
+                                </p>
+                            </div>
+
+                            <div className="p-3 bg-[#e8dcc5] rounded border border-[#8B4513] shadow-inner">
+                                <p className="text-xs font-bold text-center mb-1">本局總報酬 (P/L)</p>
+                                <div className="flex justify-between items-end">
+                                    <span className={`text-xl font-bold ${profit >= 0 ? 'text-[#C62828]' : 'text-[#2E7D32]'}`}>
+                                        {profit >= 0 ? '+' : ''}{formatMoney(profit)}
+                                    </span>
+                                    <span className={`text-sm font-bold ${profit >= 0 ? 'text-[#C62828]' : 'text-[#2E7D32]'}`}>
+                                    ({profitPercent.toFixed(2)}%)
+                                    </span>
+                                </div>
+                            </div>
+                        </WoodPanel>
+
+                        <WoodPanel lighter className="p-4">
+                            <h2 className="text-xl font-bold border-b-2 border-[#8B4513] pb-2 flex items-center gap-2">
+                                <Briefcase size={20} /> 持倉狀態
+                            </h2>
+                            <div className="mt-4 flex flex-col gap-2">
+                                <div className="flex justify-between items-center">
+                                    <span>持倉口數:</span>
+                                    <span className={`font-bold text-lg ${shares > 0 ? 'text-[#C62828]' : shares < 0 ? 'text-[#2E7D32]' : 'text-gray-600'}`}>
+                                        {Math.abs(shares)} 口
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center text-sm">
+                                    <span>方向:</span>
+                                    <span className="font-bold">
+                                        {shares > 0 ? '做多 (LONG)' : shares < 0 ? '做空 (SHORT)' : '空手 (FLAT)'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center text-sm">
+                                    <span>當前槓桿:</span>
+                                    <span className={`font-black ${leverageMode > 1 ? 'text-[#C62828]' : 'text-[#3E2723]'}`}>
+                                        {shares === 0 ? '-' : `${leverageMode}x`}
+                                    </span>
+                                </div>
+                                {shares !== 0 && (
+                                    <div className="flex justify-between items-center text-sm mt-2 pt-2 border-t border-[#8B4513]/30">
+                                        <span>持倉總值:</span>
+                                        <span className="font-mono">{formatMoney(Math.abs(shares) * currentPrice)}</span>
+                                    </div>
+                                )}
+                            </div>
+                        </WoodPanel>
+                    </div>
+
+                    {/* 中間與右側：圖表與操作 */}
+                    <div className="md:col-span-2 space-y-6">
+                        
+                        {/* 圖表區域 */}
+                        <WoodPanel className="h-80 bg-[#f4e4bc] relative">
+                            <div className="absolute top-2 left-4 z-30">
+                                <h3 className="text-lg font-bold text-[#5D4037] flex items-center gap-2">
+                                    <Activity size={18} /> 指數日線 (Day {turnsPlayed + 1})
+                                </h3>
+                                <p className="text-3xl font-mono font-bold text-[#3E2723] drop-shadow-sm">
+                                    {currentPrice}
+                                </p>
+                            </div>
+                            <div className="w-full h-full p-2 pt-16">
+                                {renderChart()}
+                            </div>
+                            
+                            {/* 遊戲結束/破產 遮罩 */}
+                            {isGameOver && (
+                                <div className="absolute inset-0 bg-[#2d1b14]/95 z-50 flex flex-col items-center justify-center text-[#F5DEB3] p-8 text-center animate-in fade-in duration-500">
+                                    {bankrupt ? (
+                                        <Skull size={64} className="text-gray-500 mb-4" />
+                                    ) : (
+                                        <Trophy size={64} className="text-yellow-500 mb-4" />
+                                    )}
+                                    
+                                    <h2 className="text-3xl font-bold mb-2">{bankrupt ? '破產斷頭' : '遊戲結算'}</h2>
+                                    <p className="text-xl mb-4">{bankrupt ? '您的保證金已不足以維持部位。' : '經歷了 100 天的市場洗禮。'}</p>
+                                    
+                                    <div className="grid grid-cols-2 gap-4 w-full max-w-sm mb-6 text-left bg-[#5D4037] p-4 rounded border-2 border-[#8B4513]">
+                                        <span>最終權益:</span>
+                                        <span className="font-mono text-right font-bold text-[#F5DEB3]">{formatMoney(equity)}</span>
+                                        <span>總報酬率:</span>
+                                        <span className={`font-mono text-right font-bold ${profit >= 0 ? 'text-[#C62828]' : 'text-[#2E7D32]'}`}>
+                                            {profitPercent.toFixed(2)}%
+                                        </span>
+                                    </div>
+                                    
+                                    <RetroButton onClick={() => window.location.reload()} variant="action">
+                                        <RefreshCw size={20} /> 再挑戰一次
+                                    </RetroButton>
+                                </div>
+                            )}
+                        </WoodPanel>
+
+                        {/* 操作面板 */}
+                        <WoodPanel lighter className="p-6">
+                            <div className="flex flex-col gap-4">
+                                
+                                {/* 下一天按鈕 */}
+                                <RetroButton 
+                                    onClick={handleNextDay} 
+                                    variant="action"
+                                    disabled={isGameOver || turnsPlayed >= MAX_TURNS}
+                                    className="w-full py-4 text-lg border-b-8 shadow-2xl flex items-center justify-center gap-3"
+                                >
+                                    {turnsPlayed >= MAX_TURNS ? (
+                                        <>
+                                            <CheckCircle size={28} />
+                                            <span>結算 (Finished)</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Calendar size={28} />
+                                            <span>進入下一天 (Next Day)</span>
+                                            <ArrowRightCircle size={28} />
+                                        </>
+                                    )}
+                                </RetroButton>
+
+                                <div className="w-full h-px bg-[#8B4513] opacity-30 my-2"></div>
+
+                                {/* 兩階段交易按鈕區 */}
+                                <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
+                                    <div className="text-center md:text-left min-w-[120px]">
+                                        <p className="text-sm font-bold opacity-80 mb-1">
+                                            策略: <span className={leverageMode > 1 ? "text-[#C62828] font-black" : "text-[#3E2723]"}>
+                                                {shares === 0 ? "觀望中" : leverageMode === 1 ? "1倍現貨 (Spot)" : "5倍期貨 (Futures)"}
+                                            </span>
+                                        </p>
+                                    </div>
+                                    
+                                    <div className="flex gap-4 w-full md:w-auto">
+                                        {shares === 0 ? (
+                                            // 1. 空手狀態
+                                            <>
+                                                <RetroButton 
+                                                    variant="danger" 
+                                                    className="flex-1 md:w-40 py-3 flex flex-col items-center gap-1"
+                                                    onClick={() => handleTrade('BUY', 1)}
+                                                    disabled={isGameOver}
+                                                >
+                                                    <TrendingUp size={24} />
+                                                    <span>梭哈做多 (1x)</span>
+                                                </RetroButton>
+
+                                                <RetroButton 
+                                                    variant="success"
+                                                    className="flex-1 md:w-40 py-3 flex flex-col items-center gap-1"
+                                                    onClick={() => handleTrade('SELL', 1)}
+                                                    disabled={isGameOver}
+                                                >
+                                                    <TrendingDown size={24} />
+                                                    <span>梭哈做空 (1x)</span>
+                                                </RetroButton>
+                                            </>
+                                        ) : (
+                                            // 持倉狀態
+                                            <>
+                                                {leverageMode === 1 && (
+                                                    // 2. 持有 1x 部位：顯示加開槓桿
+                                                    <RetroButton 
+                                                        variant={shares > 0 ? "danger" : "success"}
+                                                        className="flex-1 md:w-40 py-3 flex flex-col items-center gap-1 relative overflow-hidden"
+                                                        onClick={() => handleTrade(shares > 0 ? 'BUY' : 'SELL', 5)}
+                                                        disabled={isGameOver}
+                                                    >
+                                                        <div className="absolute inset-0 bg-yellow-400 opacity-20 animate-pulse"></div>
+                                                        <Zap size={24} className="fill-current" />
+                                                        <span>開啟5倍槓桿</span>
+                                                        <span className="text-xs opacity-80">Boost to 5x</span>
+                                                    </RetroButton>
+                                                )}
+
+                                                {/* 3. 無論 1x 或 5x 都有平倉按鈕 */}
+                                                <RetroButton 
+                                                    variant="primary" 
+                                                    className="flex-1 md:w-40 py-3 flex flex-col items-center gap-1"
+                                                    onClick={closePosition}
+                                                    disabled={isGameOver}
+                                                >
+                                                    <DollarSign size={24} />
+                                                    <span>全部平倉</span>
+                                                    <span className="text-xs opacity-80">Take Profit/Loss</span>
+                                                </RetroButton>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </WoodPanel>
+
+                        {/* 交易紀錄 */}
+                        <WoodPanel lighter className="h-48 flex flex-col">
+                            <div className="p-3 bg-[#cbb294] border-b border-[#8B4513] shadow-sm flex items-center gap-2">
+                                <History size={16} />
+                                <span className="font-bold text-sm">交易日誌</span>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2 font-mono text-xs bg-[#e8dcc5] shadow-inner space-y-1">
+                                {logs.length === 0 && <div className="text-center opacity-50 py-4">- 尚無交易紀錄 -</div>}
+                                {logs.map((log, i) => (
+                                    <div key={i} className="flex gap-2 border-b border-[#D7CCC8] pb-1 last:border-0">
+                                        <span className="text-gray-500">[{log.time}]</span>
+                                        <span className={`font-bold ${
+                                            log.action.includes('做多') || log.action.includes('平多') ? 'text-[#C62828]' : 
+                                            log.action.includes('做空') || log.action.includes('平空') ? 'text-[#2E7D32]' : 'text-blue-800'
+                                        }`}>
+                                            {log.action}
+                                        </span>
+                                        <span>{log.message}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </WoodPanel>
+
+                    </div>
+                </div>
+                
+                <div className="mt-8 text-[#8B4513] text-xs opacity-60">
+                    © 2026 Retro Trade Co. | 提示：按 5 倍槓桿按鈕後，將會自動借款將部位開到最大。
+                </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<RetroStockSim />);
+    </script>
+</body>
+</html>
